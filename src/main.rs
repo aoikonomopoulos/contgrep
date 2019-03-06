@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::path::Path;
+use std::process::exit;
 
 use clap::{App, Arg};
 use regex::bytes::{Regex, RegexSet, RegexSetBuilder};
@@ -14,16 +15,18 @@ enum State {
     ReadingContinuationLines(Vec<u8>),
 }
 
-fn cond_output(regex_set : &RegexSet, bytes : &[u8]) -> io::Result<()> {
+fn cond_output(regex_set : &RegexSet, bytes : &[u8]) -> io::Result<bool> {
     if regex_set.is_match(bytes) {
-        io::stdout().write_all(bytes)
+        io::stdout().write_all(bytes)?;
+        Ok (true)
     } else {
-        Ok (())
+        Ok (false)
     }
 }
 
-fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet) -> io::Result<()> {
+fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet) -> io::Result<bool> {
     use State::*;
+    let mut found_match = false;
     let f = File::open(p)?;
     let mut f = io::BufReader::new(f);
     let mut state = ReadingLine;
@@ -33,26 +36,35 @@ fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet) -> io::Result<
         match state {
             ReadingLine => {
                 if len == 0 {
-                    return Ok (())
+                    return Ok (found_match)
                 }
                 state = ReadingContinuationLines(line);
                 continue
             }
             ReadingContinuationLines(mut acc) => {
                 if len == 0 {
-                    cond_output(regex_set, &acc)?;
-                    return Ok (())
+                    found_match |= cond_output(regex_set, &acc)?;
+                    return Ok (found_match)
                 }
                 state = if cont_re.is_match(&line) {
                     acc.write_all(&line)?;
                     ReadingContinuationLines(acc)
                 } else {
-                    cond_output(regex_set, &acc)?;
+                    found_match |= cond_output(regex_set, &acc)?;
                     ReadingContinuationLines(line)
                 }
             }
         }
     }
+}
+
+fn search_files(filepaths : &[&Path], cont_re: &Regex, regex_set : &RegexSet)
+                -> io::Result<bool> {
+    let mut found_match = false;
+    for filepath in filepaths {
+        found_match |= search_file(filepath, &cont_re, &regex_set)?;
+    }
+    Ok (found_match)
 }
 
 fn main() {
@@ -88,7 +100,12 @@ fn main() {
     let regexes : Vec<&str> = regexes.unwrap().collect();
     let regex_set = RegexSetBuilder::new(&regexes).multi_line(true).build().unwrap();
     let cont_regex = Regex::new(matches.value_of("cont_regex").unwrap_or(r"^\s+")).unwrap();
-    for filepath in &filepaths {
-        search_file(&filepath, &cont_regex, &regex_set).unwrap()
+    match search_files(&filepaths, &cont_regex, &regex_set) {
+        Ok (true) => exit(0),
+        Ok (false) => exit(1),
+        Err (err) => {
+            eprintln!("Error: {}", err);
+            exit(2)
+        }
     }
 }
