@@ -65,6 +65,12 @@ fn main() {
              .number_of_values(1)
              .value_name("REGEX")
              .help("Match regex"))
+        .arg(Arg::with_name("cont_regex")
+             .short("c")
+             .long("continuation-regex")
+             .takes_value(true)
+             .multiple(false)
+             .value_name("REGEX"))
         .arg(Arg::with_name("files")
              .min_values(1)
              .multiple(true)
@@ -81,7 +87,8 @@ fn main() {
         .collect();
     let regexps : Vec<&str> = regexps.unwrap().collect();
     let regexp_set = RegexSetBuilder::new(&regexps).multi_line(true).build().unwrap();
+    let cont_regexp = Regex::new(matches.value_of("cont_regex").unwrap_or(r"^\s+")).unwrap();
     for filepath in &filepaths {
-        search_file(&filepath, &Regex::new(r"^\s+").unwrap(), &regexp_set).unwrap()
+        search_file(&filepath, &cont_regexp, &regexp_set).unwrap()
     }
 }
