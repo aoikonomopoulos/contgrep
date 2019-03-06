@@ -24,20 +24,55 @@ fn cond_output(regex_set : &RegexSet, bytes : &[u8]) -> io::Result<bool> {
     }
 }
 
-fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet) -> io::Result<bool> {
+struct FormatOptions {
+    file_prefix : bool,
+    line_numbers : bool,
+}
+
+struct FormatCtx<'a, 'b> {
+    opts : &'a FormatOptions,
+    path : &'b Path,
+    line_nr : usize,
+}
+
+fn format_append_line(acc : &mut io::Write, fctx : &FormatCtx, bytes : &[u8]) -> io::Result<()> {
+    if fctx.opts.file_prefix {
+        write!(acc, "{}:", fctx.path.display())?;
+    }
+    if fctx.opts.line_numbers {
+        write!(acc, "{}:", fctx.line_nr)?;
+    }
+    acc.write_all(bytes)
+}
+
+fn format_create_line(fctx : &FormatCtx, bytes : &[u8]) -> io::Result<Vec<u8>> {
+    let mut buf = vec![];
+    format_append_line(&mut buf, fctx, bytes)?;
+    Ok (buf)
+}
+
+fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet,
+               fmtopts : &FormatOptions) -> io::Result<bool> {
     use State::*;
+    let mut fctx = FormatCtx {
+        opts : fmtopts,
+        path : p,
+        line_nr : 0,
+    };
     let mut found_match = false;
     let f = File::open(p)?;
     let mut f = io::BufReader::new(f);
     let mut state = ReadingLine;
     loop {
         let mut line = vec![];
+        fctx.line_nr += 1;
         let len = f.read_until(b'\n', &mut line)?;
         match state {
             ReadingLine => {
                 if len == 0 {
                     return Ok (found_match)
                 }
+                let line = format_create_line(&fctx, &line)?;
                 state = ReadingContinuationLines(line);
                 continue
             }
@@ -47,10 +82,11 @@ fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet) -> io::Result<
                     return Ok (found_match)
                 }
                 state = if cont_re.is_match(&line) {
-                    acc.write_all(&line)?;
+                    format_append_line(&mut acc, &fctx, &line)?;
                     ReadingContinuationLines(acc)
                 } else {
                     found_match |= cond_output(regex_set, &acc)?;
+                    let line = format_create_line(&fctx, &line)?;
                     ReadingContinuationLines(line)
                 }
             }
@@ -58,11 +94,11 @@ fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet) -> io::Result<
     }
 }
 
-fn search_files(filepaths : &[&Path], cont_re: &Regex, regex_set : &RegexSet)
-                -> io::Result<bool> {
+fn search_files(filepaths : &[&Path], cont_re: &Regex, regex_set : &RegexSet,
+                fmtopts : FormatOptions) -> io::Result<bool> {
     let mut found_match = false;
     for filepath in filepaths {
-        found_match |= search_file(filepath, &cont_re, &regex_set)?;
+        found_match |= search_file(filepath, &cont_re, &regex_set, &fmtopts)?;
     }
     Ok (found_match)
 }
@@ -83,6 +119,16 @@ fn main() {
              .takes_value(true)
              .multiple(false)
              .value_name("REGEX"))
+        .arg(Arg::with_name("with_filename")
+             .short("H")
+             .required(false)
+             .takes_value(false)
+             .help("Prepend filename"))
+        .arg(Arg::with_name("with_line_number")
+             .short("n")
+             .required(false)
+             .takes_value(false)
+             .help("Prepend line number"))
         .arg(Arg::with_name("files")
              .min_values(1)
              .multiple(true)
@@ -100,7 +146,12 @@ fn main() {
     let regexes : Vec<&str> = regexes.unwrap().collect();
     let regex_set = RegexSetBuilder::new(&regexes).multi_line(true).build().unwrap();
     let cont_regex = Regex::new(matches.value_of("cont_regex").unwrap_or(r"^\s+")).unwrap();
-    match search_files(&filepaths, &cont_regex, &regex_set) {
+    let fmtopts = FormatOptions {
+        file_prefix : matches.occurrences_of("with_filename") > 0 ||
+            filepaths.len() > 1,
+        line_numbers : matches.occurrences_of("with_line_number") > 0,
+    };
+    match search_files(&filepaths, &cont_regex, &regex_set, fmtopts) {
         Ok (true) => exit(0),
         Ok (false) => exit(1),
         Err (err) => {
