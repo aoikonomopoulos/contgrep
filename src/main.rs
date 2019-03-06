@@ -65,16 +65,23 @@ fn main() {
              .number_of_values(1)
              .value_name("REGEX")
              .help("Match regex"))
-        .arg(Arg::with_name("file")
-             .required(true)
-             .index(1)
-             .help("File to search")
+        .arg(Arg::with_name("files")
+             .min_values(1)
+             .multiple(true)
+             .help("Files to search")
         );
     let matches = app.get_matches();
     let regexps = matches.values_of("regex");
-    let filepath = Path::new(matches.value_of("file").unwrap());
-
+    let filepaths : Vec<_> = matches.values_of("files")
+        .unwrap()
+        .into_iter()
+        .map(|s| {
+            Path::new(s)
+        })
+        .collect();
     let regexps : Vec<&str> = regexps.unwrap().collect();
     let regexp_set = RegexSetBuilder::new(&regexps).multi_line(true).build().unwrap();
-    search_file(&filepath, &Regex::new(r"^\s+").unwrap(), &regexp_set).unwrap()
+    for filepath in &filepaths {
+        search_file(&filepath, &Regex::new(r"^\s+").unwrap(), &regexp_set).unwrap()
+    }
 }
