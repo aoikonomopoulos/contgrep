@@ -77,7 +77,7 @@ fn main() {
              .help("Files to search")
         );
     let matches = app.get_matches();
-    let regexps = matches.values_of("regex");
+    let regexes = matches.values_of("regex");
     let filepaths : Vec<_> = matches.values_of("files")
         .unwrap()
         .into_iter()
@@ -85,10 +85,10 @@ fn main() {
             Path::new(s)
         })
         .collect();
-    let regexps : Vec<&str> = regexps.unwrap().collect();
-    let regexp_set = RegexSetBuilder::new(&regexps).multi_line(true).build().unwrap();
-    let cont_regexp = Regex::new(matches.value_of("cont_regex").unwrap_or(r"^\s+")).unwrap();
+    let regexes : Vec<&str> = regexes.unwrap().collect();
+    let regex_set = RegexSetBuilder::new(&regexes).multi_line(true).build().unwrap();
+    let cont_regex = Regex::new(matches.value_of("cont_regex").unwrap_or(r"^\s+")).unwrap();
     for filepath in &filepaths {
-        search_file(&filepath, &cont_regexp, &regexp_set).unwrap()
+        search_file(&filepath, &cont_regex, &regex_set).unwrap()
     }
 }
