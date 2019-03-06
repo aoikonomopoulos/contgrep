@@ -7,7 +7,7 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::process::exit;
 
-use clap::{App, Arg};
+use clap::{App, Arg, ArgMatches};
 use regex::bytes::{Regex, RegexSet, RegexSetBuilder};
 
 enum State {
@@ -51,7 +51,7 @@ fn format_create_line(fctx : &FormatCtx, bytes : &[u8]) -> io::Result<Vec<u8>> {
     Ok (buf)
 }
 
-fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet,
+fn search_file(p : &Path, cont_sel: &Box<Fn(&[u8]) -> bool>, regex_set : &RegexSet,
                fmtopts : &FormatOptions) -> io::Result<bool> {
     use State::*;
     let mut fctx = FormatCtx {
@@ -81,7 +81,7 @@ fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet,
                     found_match |= cond_output(regex_set, &acc)?;
                     return Ok (found_match)
                 }
-                state = if cont_re.is_match(&line) {
+                state = if cont_sel(&line) {
                     format_append_line(&mut acc, &fctx, &line)?;
                     ReadingContinuationLines(acc)
                 } else {
@@ -94,13 +94,30 @@ fn search_file(p : &Path, cont_re: &Regex, regex_set : &RegexSet,
     }
 }
 
-fn search_files(filepaths : &[&Path], cont_re: &Regex, regex_set : &RegexSet,
+fn search_files(filepaths : &[&Path], cont_sel : Box<Fn(&[u8]) -> bool>, regex_set : &RegexSet,
                 fmtopts : FormatOptions) -> io::Result<bool> {
     let mut found_match = false;
     for filepath in filepaths {
-        found_match |= search_file(filepath, &cont_re, &regex_set, &fmtopts)?;
+        found_match |= search_file(filepath, &cont_sel, &regex_set, &fmtopts)?;
     }
     Ok (found_match)
+}
+
+fn build_cont_sel(matches : &ArgMatches) -> Box<Fn(&[u8]) -> bool> {
+    match matches.value_of("cont_negative_regex") {
+        Some (neg) => {
+            let re = Regex::new(neg).unwrap();
+            Box::new(move |line| {
+                !re.is_match(line)
+            })
+        }
+        None => {
+            let re = Regex::new(matches.value_of("cont_regex").unwrap_or(r"^\s+")).unwrap();
+            Box::new(move |line| {
+                re.is_match(line)
+            })
+        }
+    }
 }
 
 fn main() {
@@ -116,6 +133,13 @@ fn main() {
         .arg(Arg::with_name("cont_regex")
              .short("c")
              .long("continuation-regex")
+             .takes_value(true)
+             .multiple(false)
+             .value_name("REGEX"))
+        .arg(Arg::with_name("cont_negative_regex")
+             .short("C")
+             .long("continuation-negative-regex")
+             .conflicts_with("cont_regex")
              .takes_value(true)
              .multiple(false)
              .value_name("REGEX"))
@@ -145,13 +169,14 @@ fn main() {
         .collect();
     let regexes : Vec<&str> = regexes.unwrap().collect();
     let regex_set = RegexSetBuilder::new(&regexes).multi_line(true).build().unwrap();
-    let cont_regex = Regex::new(matches.value_of("cont_regex").unwrap_or(r"^\s+")).unwrap();
+
+    let cont_sel = build_cont_sel(&matches);
     let fmtopts = FormatOptions {
         file_prefix : matches.occurrences_of("with_filename") > 0 ||
             filepaths.len() > 1,
         line_numbers : matches.occurrences_of("with_line_number") > 0,
     };
-    match search_files(&filepaths, &cont_regex, &regex_set, fmtopts) {
+    match search_files(&filepaths, cont_sel, &regex_set, fmtopts) {
         Ok (true) => exit(0),
         Ok (false) => exit(1),
         Err (err) => {
